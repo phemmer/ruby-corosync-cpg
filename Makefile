@@ -218,6 +218,7 @@ $(DLLIB): $(OBJS) Makefile
 
 
 $(OBJS): $(hdrdir)/ruby.h $(hdrdir)/ruby/defines.h $(arch_hdrdir)/ruby/config.h
+
 Makefile: extconf.rb
 	ruby extconf.rb
 

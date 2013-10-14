@@ -5,6 +5,9 @@
 typedef struct _ccpg_instance {
 	cpg_handle_t handle;
 	VALUE object;
+	VALUE callback_deliver;
+	VALUE callback_confchg;
+	VALUE callback_totem_confchg;
 	struct _ccpg_instance *next;
 } ccpg_instance;
 
@@ -77,6 +80,7 @@ enum cs_functions {
 	CPG_JOIN,
 };
 const char *cs_function_error_strings[][CS_ERR_SECURITY + 1] = {
+	// this is called "designated initializers". just for my own reference
 	[CPG_MODEL_INITIALIZE] = {
 		[CS_ERR_ACCESS] = "Permission denied",
 		[CS_ERR_LIBRARY] = "Connection failed",
@@ -90,7 +94,7 @@ const char *cs_function_error_str(const unsigned int funcnum, cs_error_t err) {
 	return cs_strerror(err);
 }
 
-VALUE ccpg_join(VALUE self, VALUE group) {
+VALUE ccpg_m_join(VALUE self, VALUE group) {
 	ccpg_instance *instance;
 	Data_Get_Struct(self, ccpg_instance, instance);
 
@@ -113,7 +117,7 @@ VALUE ccpg_join(VALUE self, VALUE group) {
 	return Qnil;
 }
 
-VALUE ccpg_mcast_joined(VALUE self, VALUE message_list) {
+VALUE ccpg_m_mcast_joined(VALUE self, VALUE message_list) {
 	ccpg_instance *instance;
 	Data_Get_Struct(self, ccpg_instance, instance);
 
@@ -153,19 +157,60 @@ VALUE ccpg_mcast_joined(VALUE self, VALUE message_list) {
 	return Qnil;
 }
 
+VALUE ccpg_m_dispatch(VALUE self) {
+	ccpg_instance *instance;
+	Data_Get_Struct(self, ccpg_instance, instance);
+
+	cpg_dispatch(instance->handle, CS_DISPATCH_ONE);
+	return Qnil;
+}
+
+void ccpg_callback_deliver(cpg_handle_t handle,
+		const struct cpg_name *group_name, uint32_t nodeid, uint32_t pid,
+		void *msg, size_t msg_len) {
+	ccpg_instance *instance = ccpg_instance_find_by_handle(handle);
+	if (instance == NULL)
+		rb_raise(rb_eRuntimeError, "Could not find GPG instance for incoming message. This should not have happened.");
+
+	if (instance->callback_deliver != 0) {
+		rb_funcall(instance->callback_deliver, rb_intern("call"), 1, rb_str_new((const char *)msg, msg_len));
+	}
+}
+VALUE ccpg_m_callback_deliver(int argc, VALUE *argv, VALUE self) {
+	ccpg_instance *instance;
+	Data_Get_Struct(self, ccpg_instance, instance);
+
+	VALUE block;
+
+	rb_scan_args(argc, argv, "0&", &block);
+
+	instance->callback_deliver = block;
+
+	return Qnil;
+}
+
 static void ccpg_free(ccpg_instance *instance) {
 	cpg_finalize(instance->handle);
 	ccpg_instance_delete(instance);
 	free(instance);
 }
 
-static VALUE ccpg_new(VALUE class) {
+static void ccpg_mark(ccpg_instance *instance) {
+	if (instance->callback_deliver != 0)
+		rb_gc_mark(instance->callback_deliver);
+	if (instance->callback_confchg != 0)
+		rb_gc_mark(instance->callback_confchg);
+	if (instance->callback_totem_confchg != 0)
+		rb_gc_mark(instance->callback_totem_confchg);
+}
+
+static VALUE ccpg_m_new(VALUE class) {
 	cpg_model_v1_data_t cpg_model_v1_data;
 	ccpg_instance *instance;
 
 	memset(&cpg_model_v1_data, 0, sizeof(cpg_model_v1_data_t));
 
-	//cpg_model_v1_data.cpg_deliver_fn = &cpg_deliver_fn;
+	cpg_model_v1_data.cpg_deliver_fn = &ccpg_callback_deliver;
 	//cpg_model_v1_data.cpg_confchg_fn = &cpg_confchg_fn;
 
 	instance = ALLOC(ccpg_instance);
@@ -180,7 +225,7 @@ static VALUE ccpg_new(VALUE class) {
 		return Qnil;
 	}
 
-	VALUE object = Data_Wrap_Struct(class, 0, ccpg_free, instance);
+	VALUE object = Data_Wrap_Struct(class, ccpg_mark, ccpg_free, instance);
 	instance->object = object;
 
 	return object;
@@ -192,7 +237,9 @@ void Init_CorosyncCPG() {
 
 	cCorosyncCPG = rb_define_class("CorosyncCPG", rb_cObject);
 	//rb_define_singleton_method(cCorosyncCPG, "new", cpg_new, 1);
-	rb_define_singleton_method(cCorosyncCPG, "new", ccpg_new, 0);
-	rb_define_method(cCorosyncCPG, "join", ccpg_join, 1);
-	rb_define_method(cCorosyncCPG, "mcast_joined", ccpg_mcast_joined, 1);
+	rb_define_singleton_method(cCorosyncCPG, "new", ccpg_m_new, 0);
+	rb_define_method(cCorosyncCPG, "join", ccpg_m_join, 1);
+	rb_define_method(cCorosyncCPG, "mcast_joined", ccpg_m_mcast_joined, 1);
+	rb_define_method(cCorosyncCPG, "callback_deliver", ccpg_m_callback_deliver, -1);
+	rb_define_method(cCorosyncCPG, "dispatch", ccpg_m_dispatch, 0);
 }
