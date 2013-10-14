@@ -24,8 +24,8 @@ VALUE ccpg_join(VALUE self, VALUE group) {
 	Data_Get_Struct(self, cpg_handle_t, cpg_handle);
 
 	struct cpg_name cpg_name;
-	char *group_name_str = StringValuePtr(group);
-	int group_name_len = strlen(group_name_str);
+	char *group_name_str = RSTRING_PTR(group);
+	int group_name_len = RSTRING_LEN(group);
 	if (group_name_len > sizeof(cpg_name.value)) {
 		rb_raise(rb_eArgError, "Group name must be %lu characters or less", sizeof(cpg_name.value));
 		return Qnil;
@@ -34,6 +34,46 @@ VALUE ccpg_join(VALUE self, VALUE group) {
 	cpg_name.length = group_name_len;
 
 	cs_error_t rc = cpg_join(*cpg_handle, &cpg_name);
+	if (rc != CS_OK) {
+		rb_raise(rb_eStandardError, "%s", cs_function_error_str(CPG_JOIN, rc));
+		return Qnil;
+	}
+
+	return Qnil;
+}
+
+VALUE ccpg_mcast_joined(VALUE self, VALUE message_list) {
+	cpg_handle_t *cpg_handle;
+	Data_Get_Struct(self, cpg_handle_t, cpg_handle);
+
+	int iovec_len;
+	struct iovec *iovec_list;
+	if (TYPE(message_list) == T_ARRAY) {
+		if (RARRAY_LEN(message_list) > INT_MAX) {
+			rb_raise(rb_eArgError, "Can not send more than %d messages", INT_MAX);
+			return Qnil;
+		}
+		iovec_len = RARRAY_LEN(message_list);
+		iovec_list = (struct iovec *) ALLOC_N(struct iovec, iovec_len);
+		VALUE string;
+		long i;
+		for (i = 0; i < iovec_len; i++) {
+			string = rb_ary_entry(message_list, i);
+			iovec_list[i].iov_base = RSTRING_PTR(string);
+			iovec_list[i].iov_len = RSTRING_LEN(string);
+		}
+	} else if (TYPE(message_list) == T_STRING) {
+		iovec_len = 1;
+		iovec_list = (struct iovec *) ALLOC(struct iovec);
+		iovec_list[0].iov_base = RSTRING_PTR(message_list);
+		iovec_list[0].iov_len = RSTRING_LEN(message_list);
+	} else {
+		rb_raise(rb_eArgError, "Unsupported message type. Must be a string or array");
+		return Qnil;
+	}
+
+	cs_error_t rc = cpg_mcast_joined(*cpg_handle, CPG_TYPE_AGREED, iovec_list, iovec_len);
+	free(iovec_list);
 	if (rc != CS_OK) {
 		rb_raise(rb_eStandardError, "%s", cs_function_error_str(CPG_JOIN, rc));
 		return Qnil;
@@ -77,4 +117,5 @@ void Init_CorosyncCPG() {
 	//rb_define_singleton_method(cCorosyncCPG, "new", cpg_new, 1);
 	rb_define_singleton_method(cCorosyncCPG, "new", ccpg_new, 0);
 	rb_define_method(cCorosyncCPG, "join", ccpg_join, 1);
+	rb_define_method(cCorosyncCPG, "mcast_joined", ccpg_mcast_joined, 1);
 }
